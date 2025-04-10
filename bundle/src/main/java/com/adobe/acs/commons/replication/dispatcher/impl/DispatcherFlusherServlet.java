@@ -50,7 +50,9 @@ import java.util.List;
 import java.util.Map;
 
 import static com.adobe.acs.commons.replication.dispatcher.impl.DispatcherFlushRulesImpl.AUTH_INFO;
+
 import com.google.gson.Gson;
+
 import java.util.LinkedHashMap;
 
 @SuppressWarnings("serial")
@@ -89,8 +91,14 @@ public class DispatcherFlusherServlet extends SlingAllMethodsServlet {
 
         /* Properties */
         final String[] paths = properties.get("paths", new String[0]);
-        final ReplicationActionType replicationActionType = ReplicationActionType.valueOf(properties.get(
-                "replicationActionType", ReplicationActionType.ACTIVATE.name()));
+        String replicationActionTypeString = properties.get("replicationActionType", ReplicationActionType.ACTIVATE.name());
+        boolean flushChildPages = false;
+        if ("ACTIVATE_CHILD".equals(replicationActionTypeString)) {
+            flushChildPages = true;
+            replicationActionTypeString = ReplicationActionType.ACTIVATE.name();
+        }
+
+        final ReplicationActionType replicationActionType = ReplicationActionType.valueOf(replicationActionTypeString);
 
         final List<FlushResult> overallResults = new ArrayList<FlushResult>();
         boolean caughtException = false;
@@ -109,9 +117,21 @@ public class DispatcherFlusherServlet extends SlingAllMethodsServlet {
                     // Use the HTTP Request's resource resolver; don't close this resource resolver
                     flushingResourceResolver = resourceResolver;
                 }
-
+                String[] pathsToFlush = paths;
+                if (flushChildPages) {
+                    // 收集所有子頁面路徑
+                    List<String> expandedPaths = new ArrayList<>();
+                    for (String path : paths) {
+                        // 獲取子頁面並添加其路徑
+                        Resource pathResource = flushingResourceResolver.getResource(path);
+                        if (pathResource != null) {
+                            collectChildPagePaths(pathResource, expandedPaths);
+                        }
+                    }
+                    pathsToFlush = expandedPaths.toArray(new String[0]);
+                }
                 final Map<Agent, ReplicationResult> results = dispatcherFlusher.flush(flushingResourceResolver,
-                        replicationActionType, true, paths);
+                        replicationActionType, true, pathsToFlush);
 
                 for (final Map.Entry<Agent, ReplicationResult> entry : results.entrySet()) {
                     final Agent agent = entry.getKey();
@@ -152,6 +172,28 @@ public class DispatcherFlusherServlet extends SlingAllMethodsServlet {
 
             response.sendRedirect(request.getContextPath() + currentPage.getPath() + ".html/" + suffix);
         }
+    }
+
+    /**
+     * 收集資源的所有子頁面路徑
+     *
+     * @param resource 父資源
+     * @param paths 收集路徑的列表
+     */
+    private void collectChildPagePaths(Resource resource, List<String> paths) {
+        for (Resource child : resource.getChildren()) {
+            if (isPage(child)) {
+                paths.add(child.getPath());
+            }
+        }
+    }
+
+    /**
+     * 檢查資源是否為頁面
+     */
+    private boolean isPage(Resource resource) {
+        return resource != null && "cq:Page".equals(resource.getResourceType()) ||
+                (resource.getChild("jcr:content") != null);
     }
 
     private static final class FlushResult {

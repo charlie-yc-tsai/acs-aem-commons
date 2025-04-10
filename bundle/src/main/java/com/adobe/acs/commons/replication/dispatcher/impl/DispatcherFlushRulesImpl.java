@@ -42,6 +42,7 @@ import org.apache.felix.scr.annotations.Reference;
 import org.apache.felix.scr.annotations.ReferencePolicyOption;
 import org.apache.felix.scr.annotations.Service;
 import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.Resource;
 import org.apache.sling.api.resource.ResourceResolver;
 import org.apache.sling.api.resource.ResourceResolverFactory;
 import org.apache.sling.commons.osgi.PropertiesUtil;
@@ -79,7 +80,6 @@ public class DispatcherFlushRulesImpl implements Preprocessor, DispatcherFlushRu
     private static final String OPTION_ACTIVATE = "ACTIVATE";
     private static final String OPTION_DELETE = "DELETE";
 
-
     private static final DispatcherFlushFilter HIERARCHICAL_FILTER =
             new DispatcherFlushRulesFilter(FlushType.Hierarchical);
     private static final DispatcherFlushFilter RESOURCE_ONLY_FILTER =
@@ -105,9 +105,10 @@ public class DispatcherFlushRulesImpl implements Preprocessor, DispatcherFlushRu
 
     @Property(label = "Flush Rules (Hierarchical)",
             description = "Pattern to Path associations for flush rules."
-                    + "Format: <pattern-of-trigger-content>=<path-to-flush>",
+                    + "Format: <pattern-of-trigger-content>=<path-to-flush>"
+                    + "Add '/*' suffix to flush all first level child pages (e.g., /content/b2c/* will flush /content/b2c direct children).",
             cardinality = Integer.MAX_VALUE,
-            value = { })
+            value = {})
     private static final String PROP_FLUSH_RULES = "prop.rules.hierarchical";
 
 
@@ -116,9 +117,10 @@ public class DispatcherFlushRulesImpl implements Preprocessor, DispatcherFlushRu
 
     @Property(label = "Flush Rules (ResourceOnly)",
             description = "Pattern to Path associations for flush rules. "
-                    + "Format: <pattern-of-trigger-content>=<path-to-flush>",
+                    + "Format: <pattern-of-trigger-content>=<path-to-flush>"
+                    + "Add '/*' suffix to flush all first level child pages (e.g., /content/b2c/* will flush /content/b2c direct children).",
             cardinality = Integer.MAX_VALUE,
-            value = { })
+            value = {})
     private static final String PROP_RESOURCE_ONLY_FLUSH_RULES = "prop.rules.resource-only";
 
     private static final String SERVICE_NAME = "dispatcher-flush";
@@ -159,7 +161,7 @@ public class DispatcherFlushRulesImpl implements Preprocessor, DispatcherFlushRu
         final ReplicationActionType flushActionType =
                 replicationActionType == null ? replicationAction.getType() : replicationActionType;
 
-        try (ResourceResolver resourceResolver = resourceResolverFactory.getServiceResourceResolver(AUTH_INFO)){
+        try (ResourceResolver resourceResolver = resourceResolverFactory.getServiceResourceResolver(AUTH_INFO)) {
 
             // Flush full content hierarchies
             for (final Map.Entry<Pattern, String[]> entry : this.hierarchicalFlushRules.entrySet()) {
@@ -168,13 +170,18 @@ public class DispatcherFlushRulesImpl implements Preprocessor, DispatcherFlushRu
 
                 if (m.matches()) {
                     for (final String value : entry.getValue()) {
-                        final String flushPath = m.replaceAll(value);
-    
+                        String flushPath = m.replaceAll(value);
                         log.debug("Requesting hierarchical flush of associated path: {} ~> {}", path,
                                 flushPath);
-                        dispatcherFlusher.flush(resourceResolver, flushActionType, false,
-                                HIERARCHICAL_FILTER,
-                                flushPath);
+                        // 檢查是否有 /* 後綴
+                        if (flushPath.endsWith("/*")) {
+                            flushPath = flushPath.substring(0, flushPath.length() - 2);
+                            flushFirstLevelChildren(resourceResolver, flushActionType, HIERARCHICAL_FILTER, flushPath);
+                        } else {
+                            dispatcherFlusher.flush(resourceResolver, flushActionType, false,
+                                    HIERARCHICAL_FILTER,
+                                    flushPath);
+                        }
                     }
                 }
             }
@@ -186,12 +193,18 @@ public class DispatcherFlushRulesImpl implements Preprocessor, DispatcherFlushRu
 
                 if (m.matches()) {
                     for (final String value : entry.getValue()) {
-                        final String flushPath = m.replaceAll(value);
-    
+                        String flushPath = m.replaceAll(value);
+
                         log.debug("Requesting ResourceOnly flush of associated path: {} ~> {}", path, entry.getValue());
-                        dispatcherFlusher.flush(resourceResolver, flushActionType, false,
-                                RESOURCE_ONLY_FILTER,
-                                flushPath);
+
+                        if (flushPath.endsWith("/*")) {
+                            flushPath = flushPath.substring(0, flushPath.length() - 2);
+                            flushFirstLevelChildren(resourceResolver, flushActionType, RESOURCE_ONLY_FILTER, flushPath);
+                        } else {
+                            dispatcherFlusher.flush(resourceResolver, flushActionType, false,
+                                    RESOURCE_ONLY_FILTER,
+                                    flushPath);
+                        }
                     }
                 }
             }
@@ -205,6 +218,37 @@ public class DispatcherFlushRulesImpl implements Preprocessor, DispatcherFlushRu
     }
 
     /**
+     * Flushes the first-level children of a specified parent path.
+     *
+     * @param resourceResolver The resource resolver used to access resources.
+     * @param actionType The type of replication action to perform.
+     * @param dispatcherFlushFilter The filter used for dispatcher flush operations.
+     * @param parentPath The path of the parent resource whose first-level children will be flushed.
+     */
+    private void flushFirstLevelChildren(ResourceResolver resourceResolver, ReplicationActionType actionType, DispatcherFlushFilter dispatcherFlushFilter, String parentPath) {
+        try {
+            org.apache.sling.api.resource.Resource parent = resourceResolver.getResource(parentPath);
+            if (parent != null) {
+                java.util.Iterator<org.apache.sling.api.resource.Resource> children = parent.listChildren();
+                while (children.hasNext()) {
+                    org.apache.sling.api.resource.Resource child = children.next();
+                    if (isPage(child)) {
+                        String childPath = child.getPath();
+                        log.debug("Flushing first-level child path: {}", childPath);
+                        dispatcherFlusher.flush(resourceResolver, actionType, false, dispatcherFlushFilter, childPath);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error flushing first-level children of {}: {}", parentPath, e.getMessage(), e);
+        }
+    }
+
+    private boolean isPage(Resource resource) {
+        return resource != null && "cq:Page".equals(resource.getResourceType()) ||
+                (resource.getChild("jcr:content") != null);
+    }
+    /**
      * Checks if this service should react to or ignore this replication action.
      *
      * @param replicationAction The replication action that is initiating this flush request
@@ -212,7 +256,7 @@ public class DispatcherFlushRulesImpl implements Preprocessor, DispatcherFlushRu
      * @return true is this service should attempt to flush associated resources for this replication request
      */
     private boolean accepts(final ReplicationAction replicationAction, final ReplicationOptions replicationOptions) {
-        if (replicationAction == null || replicationOptions == null)  {
+        if (replicationAction == null || replicationOptions == null) {
             log.debug("Replication Action or Options are null. Skipping this replication.");
             return false;
         }
@@ -269,8 +313,8 @@ public class DispatcherFlushRulesImpl implements Preprocessor, DispatcherFlushRu
      * @param configuredRules String based flush rules from OSGi configuration
      * @return returns the configures flush rules
      */
-     protected final Map<Pattern, String[]> configureFlushRules(final Map<String, String> configuredRules)
-             throws Exception {
+    protected final Map<Pattern, String[]> configureFlushRules(final Map<String, String> configuredRules)
+            throws Exception {
         final Map<Pattern, String[]> rules = new LinkedHashMap<Pattern, String[]>();
 
         for (final Map.Entry<String, String> entry : configuredRules.entrySet()) {

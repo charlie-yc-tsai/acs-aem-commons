@@ -60,7 +60,11 @@
                                             <delete
                                                     jcr:primaryType="nt:unstructured"
                                                     text="Delete Cache"
-                                                    value="DELETE"/>                                        
+                                                    value="DELETE"/>
+                                            <activate-child
+                                                    jcr:primaryType="nt:unstructured"
+                                                    text="Invalidate Cache (First-Level Children Only)"
+                                                    value="ACTIVATE_CHILD"/>
                                         </items>
                                     </replication-action-type>
 

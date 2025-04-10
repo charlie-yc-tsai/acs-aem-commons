@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](http://keepachangelog.com)
 
 ## Unreleased ([details][unreleased changes details])
 
-6.6.0 - 2024-04-15
+6.6.1 - 2024-04-15
 
 ## Added
 

@@ -46,6 +46,9 @@
         <li data-sly-test="${'DELETE' == model.actionType}">
             Delete Cache
         </li>
+        <li data-sly-test="${'ACTIVATE_CHILD' == model.actionType}">
+            Invalidate Cache (First-Level Children Only)
+        </li>
         <li data-sly-test="${'' == model.actionType}"
             class="not-set">Flush method not set
         </li>
